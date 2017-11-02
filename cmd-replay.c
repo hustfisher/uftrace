@@ -336,7 +336,10 @@ static void print_event(struct ftrace_task_handle *task,
 		pr_color(color, "%s", evt_name);
 	}
 	else if (evt_id >= EVENT_ID_PERF) {
-		pr_color(color, "%s", evt_name);
+		if (evt_id == EVENT_ID_PERF_COMM)
+			pr_color(color, "%s (comm=%s)", evt_name, task->args.data);
+		else
+			pr_color(color, "%s", evt_name);
 	}
 	else if (evt_id >= EVENT_ID_BUILTIN) {
 		struct uftrace_proc_statm *statm;

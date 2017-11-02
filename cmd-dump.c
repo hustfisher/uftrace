@@ -12,6 +12,7 @@
 #include "utils/fstack.h"
 #include "utils/filter.h"
 #include "utils/kernel.h"
+#include "utils/perf.h"
 #include "libtraceevent/kbuffer.h"
 #include "libtraceevent/event-parse.h"
 
@@ -735,10 +736,25 @@ static void print_raw_perf_event(struct uftrace_dump_ops *ops,
 
 	pr_time(frs->time);
 	pr_out("%5d: [%s] %s(%d)\n",
-	       perf->ctxsw.tid, rstack_type(frs), evt_name, frs->addr);
+	       perf->tid, rstack_type(frs), evt_name, frs->addr);
 
-	if (debug)
-		pr_hex(&raw->file_offset, &perf->ctxsw, sizeof(perf->ctxsw));
+	if (debug) {
+		switch (perf->type) {
+		case PERF_RECORD_FORK:
+		case PERF_RECORD_EXIT:
+			pr_hex(&raw->file_offset, &perf->u.task,
+			       sizeof(perf->u.task));
+			break;
+		case PERF_RECORD_COMM:
+			pr_hex(&raw->file_offset, &perf->u.comm,
+			       sizeof(perf->u.comm));
+			break;
+		case PERF_RECORD_SWITCH:
+			pr_hex(&raw->file_offset, &perf->u.ctxsw,
+			       sizeof(perf->u.ctxsw));
+			break;
+		}
+	}
 
 	free(evt_name);
 }

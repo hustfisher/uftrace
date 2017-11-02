@@ -1481,7 +1481,8 @@ static bool check_linux_perf_event(char *events)
 
 	evt = strtok(tmp, ";");
 	while (evt) {
-		if (fnmatch(evt, "linux:schedule", 0) == 0) {
+		if (fnmatch(evt, "linux:schedule", 0) == 0 ||
+		    fnmatch(evt, "linux:task", 0) == 0) {
 			found = true;
 			break;
 		}

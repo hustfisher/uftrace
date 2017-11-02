@@ -1112,6 +1112,15 @@ char *get_event_name(struct ftrace_file_handle *handle, unsigned evt_id)
 		case EVENT_ID_PERF_SCHED_BOTH:
 			event_name = "schedule";
 			break;
+		case EVENT_ID_PERF_TASK:
+			event_name = "task-new";
+			break;
+		case EVENT_ID_PERF_EXIT:
+			event_name = "task-exit";
+			break;
+		case EVENT_ID_PERF_COMM:
+			event_name = "task-comm";
+			break;
 		default:
 			event_name = "unknown";
 			break;
@@ -1671,7 +1680,7 @@ static void __fstack_consume(struct ftrace_task_handle *task,
 	else {  /* must be perf event */
 		assert(handle->last_perf_idx >= 0);
 
-		handle->perf[handle->last_perf_idx].valid= false;
+		handle->perf[handle->last_perf_idx].valid = false;
 		handle->last_perf_idx = -1;
 	}
 
@@ -1749,8 +1758,8 @@ static int __read_rstack(struct ftrace_file_handle *handle,
 				warn = true;
 			}
 		}
-		else if (perf->ctxsw.time < min_timestamp) {
-			min_timestamp = perf->ctxsw.time;
+		else if (perf->time < min_timestamp) {
+			min_timestamp = perf->time;
 			source = PERF;
 		}
 	}
@@ -1766,8 +1775,14 @@ static int __read_rstack(struct ftrace_file_handle *handle,
 		break;
 
 	case PERF:
-		task = get_task_handle(handle, perf->ctxsw.tid);
+		task = get_task_handle(handle, perf->tid);
 		task->rstack = get_perf_record(handle, perf);
+
+		if (task->rstack->addr == EVENT_ID_PERF_COMM) {
+			/* abuse task->args */
+			task->args.data = xstrdup(perf->u.comm.comm);
+			task->args.len  = strlen(perf->u.comm.comm);
+		}
 		break;
 
 	case NONE:

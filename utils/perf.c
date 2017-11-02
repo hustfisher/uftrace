@@ -37,6 +37,8 @@ static int open_perf_event(int pid, int cpu)
 		.wakeup_watermark	= PERF_WATERMARK,
 		.use_clockid		= 1,
 		.clockid		= CLOCK_MONOTONIC,
+		.task			= 1,
+		.comm			= 1,
 		INIT_CTXSW_ATTR
 	};
 	unsigned long flag = PERF_FLAG_FD_NO_GROUP;
@@ -289,28 +291,86 @@ void finish_perf_data(struct ftrace_file_handle *handle)
 static int read_perf_event(struct ftrace_file_handle *handle,
 			   struct uftrace_perf_reader *perf)
 {
-	struct perf_context_switch_event ev;
+	struct perf_event_header h;
+	struct perf_context_switch_event cs;
+	struct perf_task_event t;
+	struct perf_comm_event c;
+	int comm_len;
 
 	if (perf->done || perf->fp == NULL)
 		return -1;
 
-	if (fread(&ev, sizeof(ev), 1, perf->fp) != 1) {
+	if (fread(&h, sizeof(h), 1, perf->fp) != 1) {
 		perf->done = true;
 		return -1;
 	}
 
-	if (ev.header.type != PERF_RECORD_SWITCH)
-		return -1;
-
-	perf->ctxsw.time = ev.sample_id.time;
-	perf->ctxsw.tid  = ev.sample_id.tid;
-	perf->ctxsw.out  = ev.header.misc & PERF_RECORD_MISC_SWITCH_OUT;
-
 	if (handle->needs_byte_swap) {
-		perf->ctxsw.time = bswap_64(perf->ctxsw.time);
-		perf->ctxsw.tid  = bswap_32(perf->ctxsw.tid);
+		h.type = bswap_32(h.type);
+		h.misc = bswap_16(h.misc);
+		h.size = bswap_16(h.size);
 	}
 
+	switch (h.type) {
+	case PERF_RECORD_SWITCH:
+		if (fread(&cs, sizeof(cs), 1, perf->fp) != 1)
+			return -1;
+
+		if (handle->needs_byte_swap) {
+			cs.sample_id.time = bswap_64(cs.sample_id.time);
+			cs.sample_id.tid  = bswap_32(cs.sample_id.tid);
+		}
+
+		perf->u.ctxsw.out  = h.misc & PERF_RECORD_MISC_SWITCH_OUT;
+
+		perf->time = cs.sample_id.time;
+		perf->tid  = cs.sample_id.tid;
+		break;
+
+	case PERF_RECORD_FORK:
+	case PERF_RECORD_EXIT:
+		if (fread(&t, sizeof(t), 1, perf->fp) != 1)
+			return -1;
+
+		if (handle->needs_byte_swap) {
+			t.tid  = bswap_32(t.tid);
+			t.pid  = bswap_32(t.pid);
+			t.ppid = bswap_32(t.ppid);
+			t.time = bswap_64(t.time);
+		}
+
+		perf->u.task.pid  = t.pid;
+		perf->u.task.ppid = t.ppid;
+
+		perf->time = t.time;
+		perf->tid  = t.tid;
+		break;
+
+	case PERF_RECORD_COMM:
+		/* length of comm event is variable */
+		comm_len = ALIGN(h.size - sizeof(h) - sizeof(c.sample_id), 8);
+		if (fread(&c, comm_len, 1, perf->fp) != 1)
+			return -1;
+
+		if (fread(&c.sample_id, sizeof(c.sample_id), 1, perf->fp) != 1)
+			return -1;
+
+		if (handle->needs_byte_swap) {
+			c.tid            = bswap_32(c.tid);
+			c.sample_id.time = bswap_64(c.sample_id.time);
+		}
+
+		strncpy(perf->u.comm.comm, c.comm, sizeof(c.comm));
+
+		perf->time = c.sample_id.time;
+		perf->tid  = c.tid;
+		break;
+
+	default:
+		return -1;
+	}
+
+	perf->type = h.type;
 	perf->valid = true;
 	return 0;
 }
@@ -343,8 +403,8 @@ int read_perf_data(struct ftrace_file_handle *handle)
 				continue;
 		}
 
-		if (perf->ctxsw.time < min_time) {
-			min_time = perf->ctxsw.time;
+		if (perf->time < min_time) {
+			min_time = perf->time;
 			best = i;
 		}
 	}
@@ -377,13 +437,26 @@ struct uftrace_record * get_perf_record(struct ftrace_file_handle *handle,
 	}
 
 	rec.type  = UFTRACE_EVENT;
-	rec.time  = perf->ctxsw.time;
+	rec.time  = perf->time;
 	rec.magic = RECORD_MAGIC;
 
-	if (perf->ctxsw.out)
-		rec.addr = EVENT_ID_PERF_SCHED_OUT;
-	else
-		rec.addr = EVENT_ID_PERF_SCHED_IN;
+	switch (perf->type) {
+	case PERF_RECORD_FORK:
+		rec.addr = EVENT_ID_PERF_TASK;
+		break;
+	case PERF_RECORD_EXIT:
+		rec.addr = EVENT_ID_PERF_EXIT;
+		break;
+	case PERF_RECORD_COMM:
+		rec.addr = EVENT_ID_PERF_COMM;
+		break;
+	case PERF_RECORD_SWITCH:
+		if (perf->u.ctxsw.out)
+			rec.addr = EVENT_ID_PERF_SCHED_OUT;
+		else
+			rec.addr = EVENT_ID_PERF_SCHED_IN;
+		break;
+	}
 
 	return &rec;
 }

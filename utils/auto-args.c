@@ -162,12 +162,14 @@ char *get_auto_retspec_str(void)
 
 void setup_auto_args(void)
 {
+	parse_enum_string(auto_enum_list);
 	build_auto_args(auto_args_list, &auto_argspec, TRIGGER_FL_ARGUMENT);
 	build_auto_args(auto_retvals_list, &auto_retspec, TRIGGER_FL_RETVAL);
 }
 
-void setup_auto_args_str(char *args, char *rets)
+void setup_auto_args_str(char *args, char *rets, char *enums)
 {
+	parse_enum_string(enums);
 	build_auto_args(args, &auto_argspec, TRIGGER_FL_ARGUMENT);
 	build_auto_args(rets, &auto_retspec, TRIGGER_FL_RETVAL);
 }
@@ -391,17 +393,32 @@ char * convert_enum_val(struct enum_def *e_def, long val)
 	struct enum_val *e_val;
 	char *str = NULL;
 
+	/* exact match? */
 	list_for_each_entry(e_val, &e_def->vals, list) {
 		if (e_val->val == val)
 			return xstrdup(e_val->str);
 	}
 
+	/* if not, try OR-ing bit flags */
 	list_for_each_entry(e_val, &e_def->vals, list) {
-		if (e_val->val < val) {
+		if (e_val->val <= val) {
 			val -= e_val->val;
 			str = strjoin(str, e_val->str, "|");
 		}
+
+		if (val == 0)
+			break;
 	}
+
+	/* print hex for unknown value */
+	if (val) {
+		char *tmp;
+
+		xasprintf(&tmp, "%s+%#lx", str, val);
+		free(str);
+		str = tmp;
+	}
+
 	return str;
 }
 
@@ -443,6 +460,9 @@ int parse_enum_string(char *enum_str)
 	struct enum_def *e_def;
 	struct enum_val *e_val;
 	enum enum_token_ret ret;
+
+	if (enum_str == NULL)
+		return 0;
 
 	str = tmp = xstrdup(enum_str);
 
@@ -545,6 +565,11 @@ void release_enum_def(struct rb_root *root)
 		}
 		free(e_def);
 	}
+}
+
+char *get_auto_enum_str(void)
+{
+	return auto_enum_list;
 }
 
 #ifdef UNIT_TEST

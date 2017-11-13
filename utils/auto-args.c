@@ -363,6 +363,63 @@ static void add_enum_tree(struct rb_root *root, struct enum_def *e_def)
 	rb_insert_color(&e_def->node, root);
 }
 
+struct enum_def * find_enum_def(char *name)
+{
+	struct rb_node *parent = NULL;
+	struct rb_node **p = &enum_root.rb_node;
+	struct enum_def *iter;
+	int cmp;
+
+	while (*p) {
+		parent = *p;
+		iter = rb_entry(parent, struct enum_def, node);
+
+		cmp = strcmp(iter->name, name);
+		if (cmp == 0)
+			return iter;
+
+		if (cmp < 0)
+			p = &parent->rb_left;
+		else
+			p = &parent->rb_right;
+	}
+	return NULL;
+}
+
+char * convert_enum_val(struct enum_def *e_def, long val)
+{
+	struct enum_val *e_val;
+	char *str = NULL;
+
+	list_for_each_entry(e_val, &e_def->vals, list) {
+		if (e_val->val == val)
+			return xstrdup(e_val->str);
+	}
+
+	list_for_each_entry(e_val, &e_def->vals, list) {
+		if (e_val->val < val) {
+			val -= e_val->val;
+			str = strjoin(str, e_val->str, "|");
+		}
+	}
+	return str;
+}
+
+/* caller should free the return value */
+char *get_enum_string(char *name, long val)
+{
+	struct enum_def *e_def;
+	char *ret;
+
+	e_def = find_enum_def(name);
+	if (e_def == NULL)
+		xasprintf(&ret, "%ld", val);
+	else
+		ret = convert_enum_val(e_def, val);
+
+	return ret;
+}
+
 /**
  * parse_enum_string - parse enum and add it to a tree
  * @enum_str: string presentation of enum
@@ -572,12 +629,37 @@ TEST_CASE(argspec_parse_enum)
 	char test_enum_str1[] = "enum xxx { ZERO, ONE = 111, TWO };";
 	char test_enum_str2[] = "enum a { AAA, BBB = 1, CCC, }";
 	char test_enum_str3[] = "enum uftrace{record=-100,replay=23,report}";
+	struct enum_def *e_def;
+	struct enum_val *e_val;
+	char *str;
 
 	TEST_EQ(parse_enum_string(test_enum_str1), 0);
 	TEST_EQ(parse_enum_string(test_enum_str2), 0);
 	TEST_EQ(parse_enum_string(test_enum_str3), 0);
 
+	e_def = find_enum_def("xxx");
+	TEST_NE(e_def, NULL);
+
+	e_val = list_last_entry(&e_def->vals, struct enum_val, list);
+	TEST_STREQ(e_val->str, "ZERO");
+	TEST_EQ(e_val->val, 0L);
+
+	e_val = list_first_entry(&e_def->vals, struct enum_val, list);
+	TEST_STREQ(e_val->str, "TWO");
+	TEST_EQ(e_val->val, 112L);
+
+	str = get_enum_string("a", 3);
+	TEST_STREQ(str, "CCC|BBB");
+	free(str);
+
+	str = get_enum_string("uftrace", 24);
+	TEST_STREQ(str, "report");
+	free(str);
+
 	release_enum_def(&enum_root);
+
+	TEST_EQ(find_enum_def("xxx"), NULL);
+
 	return TEST_OK;
 }
 

@@ -27,6 +27,7 @@ enum replay_field_id {
 	REPLAY_F_TIMESTAMP,
 	REPLAY_F_TIMEDELTA,
 	REPLAY_F_ELAPSED,
+	REPLAY_F_TASK,
 };
 
 struct replay_field {
@@ -102,6 +103,12 @@ static void print_elapsed(struct ftrace_task_handle *task,
 	print_time_unit(elapsed);
 }
 
+static void print_task(struct ftrace_task_handle *task,
+		       struct fstack *fstack, void *arg)
+{
+	pr_out("%15s", task->t->comm);
+}
+
 static struct replay_field field_duration = {
 	.id      = REPLAY_F_DURATION,
 	.name    = "duration",
@@ -161,6 +168,15 @@ static struct replay_field field_elapsed = {
 	.list    = LIST_HEAD_INIT(field_elapsed.list),
 };
 
+static struct replay_field field_task = {
+	.id      = REPLAY_F_TASK,
+	.name    = "task",
+	.header  = "      TASK NAME",
+	.length  = 15,
+	.print   = print_task,
+	.list    = LIST_HEAD_INIT(field_task.list),
+};
+
 static void print_header(void)
 {
 	struct replay_field *field;
@@ -183,6 +199,7 @@ struct replay_field *field_table[] = {
 	&field_time,
 	&field_delta,
 	&field_elapsed,
+	&field_task,
 };
 
 static void print_field(struct ftrace_task_handle *task,

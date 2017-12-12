@@ -19,6 +19,7 @@ class TestCase(TestBase):
             [10827] |     oops() {
    1.752 us [10827] |       __cxa_allocate_exception();
    0.088 us [10827] |       std::exception::exception();
+  31.141 us [10827] |       __cxa_throw();
   84.367 us [10827] |     } /* oops */
   84.652 us [10827] |   } /* test */
    0.090 us [10827] |   bar();

@@ -74,12 +74,28 @@ static void send_dlopen_msg(struct mcount_thread_data *mtdp, const char *sess_id
 	}
 }
 
+static void add_dummy_rstack(struct mcount_thread_data *mtdp, void *addr)
+{
+	struct mcount_ret_stack *rstack = &mtdp->rstack[mtdp->idx++];
+
+	rstack->depth      = mtdp->record_idx;
+	rstack->dyn_idx    = MCOUNT_INVALID_DYNIDX;
+	rstack->parent_loc = &mtdp->cxa_eh_dummy;
+	rstack->parent_ip  = 0;
+	rstack->child_ip   = (unsigned long)addr;
+	rstack->end_time   = 0;
+	rstack->start_time = mcount_gettime();
+	rstack->flags      = 0;
+}
+
 /*
  * hooking functions
  */
 static int (*real_backtrace)(void **buffer, int sz);
 static void (*real_cxa_throw)(void *exc, void *type, void *dest);
-static void (*real_cxa_end_catch)(void);
+static void (*real_cxa_rethrow)(void);
+static void * (*real_cxa_begin_catch)(void *exc);
+static void (*real_unwind_resume)(void *exc);
 static void * (*real_dlopen)(const char *filename, int flags);
 static __noreturn void (*real_pthread_exit)(void *retval);
 
@@ -87,7 +103,9 @@ void mcount_hook_functions(void)
 {
 	real_backtrace		= dlsym(RTLD_NEXT, "backtrace");
 	real_cxa_throw		= dlsym(RTLD_NEXT, "__cxa_throw");
-	real_cxa_end_catch	= dlsym(RTLD_NEXT, "__cxa_end_catch");
+	real_cxa_rethrow	= dlsym(RTLD_NEXT, "__cxa_rethrow");
+	real_cxa_begin_catch	= dlsym(RTLD_NEXT, "__cxa_begin_catch");
+	real_unwind_resume	= dlsym(RTLD_NEXT, "_Unwind_Resume");
 	real_dlopen		= dlsym(RTLD_NEXT, "dlopen");
 	real_pthread_exit	= dlsym(RTLD_NEXT, "pthread_exit");
 }
@@ -126,12 +144,52 @@ __visible_default void __cxa_throw(void *exception, void *type, void *dest)
 		 * It pairs to __cxa_end_catch().
 		 */
 		mcount_rstack_restore(mtdp);
+		add_dummy_rstack(mtdp, real_cxa_throw);
 	}
 
 	real_cxa_throw(exception, type, dest);
 }
 
-__visible_default void __cxa_end_catch(void)
+__visible_default void __cxa_rethrow(void)
+{
+	struct mcount_thread_data *mtdp;
+
+	mtdp = get_thread_data();
+	if (!check_thread_data(mtdp)) {
+		pr_dbg("exception re-thrown from [%d]\n", mtdp->idx);
+
+		/*
+		 * restore return addresses so that it can unwind stack
+		 * frames safely during the exception handling.
+		 * It pairs to __cxa_end_catch().
+		 */
+		mcount_rstack_restore(mtdp);
+		add_dummy_rstack(mtdp, real_cxa_rethrow);
+	}
+
+	real_cxa_rethrow();
+}
+
+__visible_default void _Unwind_Resume(void *exception)
+{
+	struct mcount_thread_data *mtdp;
+
+	mtdp = get_thread_data();
+	if (!check_thread_data(mtdp)) {
+		pr_dbg("exception thrown from [%d]\n", mtdp->idx);
+
+		/*
+		 * restore return addresses so that it can unwind stack
+		 * frames safely during the exception handling.
+		 * It pairs to __cxa_end_catch().
+		 */
+		mcount_rstack_restore(mtdp);
+	}
+
+	real_unwind_resume(exception);
+}
+
+__visible_default void * __cxa_begin_catch(void *exception)
 {
 	struct mcount_thread_data *mtdp;
 	struct mcount_ret_stack *rstack;
@@ -140,33 +198,35 @@ __visible_default void __cxa_end_catch(void)
 	/* get frame address where exception handler returns */
 	retaddr = (unsigned long)__builtin_frame_address(0);
 
-	real_cxa_end_catch();
-
 	pr_dbg("exception returned at frame: %#lx\n", retaddr);
 
 	mtdp = get_thread_data();
 	if (!check_thread_data(mtdp)) {
 		int idx;
 
+		rstack = &mtdp->rstack[mtdp->idx - 1];
+
+		/* record unwinded functions */
+		if (!(rstack->flags & MCOUNT_FL_NORECORD))
+			rstack->end_time = mcount_gettime();
+
+		mcount_exit_filter_record(mtdp, rstack, NULL);
+
 		/* it needs to find how much stack frame was unwinded */
 		for (idx = mtdp->idx - 1; idx >= 0; idx--) {
 			rstack = &mtdp->rstack[idx];
 
+			if (rstack->parent_loc == &mtdp->cxa_eh_dummy)
+				continue;
+
 			pr_dbg2("[%d] parent at %p\n", idx, rstack->parent_loc);
 			if (rstack->parent_loc == &mtdp->cygprof_dummy)
 				break;
-
 			if ((unsigned long)rstack->parent_loc > retaddr) {
 				/* do not overwrite current return address */
 				rstack->parent_ip = *rstack->parent_loc;
 				break;
 			}
-
-			/* record unwinded functions */
-			if (!(rstack->flags & MCOUNT_FL_NORECORD))
-				rstack->end_time = mcount_gettime();
-
-			mcount_exit_filter_record(mtdp, rstack, NULL);
 		}
 
 		/* we're in ENTER state, so add 1 to the index */
@@ -175,6 +235,8 @@ __visible_default void __cxa_end_catch(void)
 
 		mcount_rstack_reset(mtdp);
 	}
+
+	return real_cxa_begin_catch(exception);
 }
 
 __visible_default void * dlopen(const char *filename, int flags)

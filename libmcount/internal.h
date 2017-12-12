@@ -86,6 +86,7 @@ struct mcount_thread_data {
 	int				record_idx;
 	bool				recursion_guard;
 	unsigned long			cygprof_dummy;
+	unsigned long			cxa_eh_dummy;
 	struct mcount_ret_stack		*rstack;
 	void				*argbuf;
 	struct filter_control		filter;
